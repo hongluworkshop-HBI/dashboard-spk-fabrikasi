@@ -1,0 +1,5 @@
+streamlit>=1.62
+st-gsheets-connection
+pandas>=2.0
+plotly>=5.0
+openai>=1.0
