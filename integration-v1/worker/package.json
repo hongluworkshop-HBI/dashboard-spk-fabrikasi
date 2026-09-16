@@ -1,0 +1,16 @@
+{
+  "name": "honglu-fabrikasi-integration-v1-worker",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js && node --test test/*.test.mjs",
+    "dev": "wrangler dev --env dev",
+    "deploy:dev": "wrangler deploy --env dev",
+    "deploy:test": "wrangler deploy --env test",
+    "deploy:production": "wrangler deploy --env production"
+  },
+  "devDependencies": {
+    "wrangler": "4.102.0"
+  }
+}
