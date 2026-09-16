@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: fabrikasi-integration-v1-${{ github.event.inputs.target || 'dev' }}
+  group: fabrikasi-integration-v1-${{ github.event.inputs.target || 'ci' }}
   cancel-in-progress: false
 
 env:
@@ -48,9 +48,10 @@ jobs:
 
   deploy-cloudflare:
     name: Deploy Cloudflare Worker
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: validate
     runs-on: ubuntu-latest
-    environment: integration-${{ github.event.inputs.target || 'dev' }}
+    environment: integration-${{ inputs.target }}
     defaults:
       run:
         working-directory: integration-v1/worker
@@ -63,7 +64,7 @@ jobs:
       - name: Resolve target
         id: target
         shell: bash
-        run: echo "env=${{ github.event.inputs.target || 'dev' }}" >> "$GITHUB_OUTPUT"
+        run: echo "env=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
       - name: Sync Worker secrets
         shell: bash
         env:
