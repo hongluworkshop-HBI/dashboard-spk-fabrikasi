@@ -1,0 +1,136 @@
+name: FABRIKASI Integration V1 - Cloudflare Pipeline
+
+on:
+  push:
+    branches:
+      - integration-v1-cloudflare-pipeline
+    paths:
+      - "integration-v1/**"
+      - ".github/workflows/integration-v1-pipeline.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deployment target"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - test
+          - production
+      deploy_apps_script:
+        description: "Also deploy Apps Script using clasp"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fabrikasi-integration-v1-${{ github.event.inputs.target || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  validate:
+    name: Validate Worker and Apps Script
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integration-v1/worker
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --no-audit --no-fund
+      - run: npm run check
+      - name: Wrangler dry run
+        run: npx wrangler deploy --dry-run --env dev
+      - name: Apps Script syntax check
+        working-directory: integration-v1/apps-script
+        run: cp Code.gs /tmp/Code.js && node --check /tmp/Code.js
+
+  deploy-cloudflare:
+    name: Deploy Cloudflare Worker
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: integration-${{ github.event.inputs.target || 'dev' }}
+    defaults:
+      run:
+        working-directory: integration-v1/worker
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --no-audit --no-fund
+      - name: Resolve target
+        id: target
+        shell: bash
+        run: echo "env=${{ github.event.inputs.target || 'dev' }}" >> "$GITHUB_OUTPUT"
+      - name: Sync Worker secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GAS_ORIGIN_URL: ${{ secrets.GAS_ORIGIN_URL }}
+          GATEWAY_SHARED_SECRET: ${{ secrets.GATEWAY_SHARED_SECRET }}
+          CONTROL_TOKEN: ${{ secrets.CONTROL_TOKEN }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$GAS_ORIGIN_URL"
+          test -n "$GATEWAY_SHARED_SECRET"
+          test -n "$CONTROL_TOKEN"
+          printf '%s' "$GAS_ORIGIN_URL" | npx wrangler secret put GAS_ORIGIN_URL --env "${{ steps.target.outputs.env }}"
+          printf '%s' "$GATEWAY_SHARED_SECRET" | npx wrangler secret put GATEWAY_SHARED_SECRET --env "${{ steps.target.outputs.env }}"
+          printf '%s' "$CONTROL_TOKEN" | npx wrangler secret put CONTROL_TOKEN --env "${{ steps.target.outputs.env }}"
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: integration-v1/worker
+          command: deploy --env ${{ steps.target.outputs.env }}
+
+  deploy-apps-script:
+    name: Deploy Google Apps Script
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_apps_script }}
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: integration-${{ inputs.target }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install clasp
+        run: npm install --global @google/clasp@latest
+      - name: Restore clasp auth and project mapping
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+        run: |
+          test -n "$CLASPRC_JSON"
+          test -n "$GAS_SCRIPT_ID"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          cat > .clasp.json <<EOF
+          {"scriptId":"$GAS_SCRIPT_ID","rootDir":"integration-v1/apps-script"}
+          EOF
+      - name: Push Apps Script source
+        run: clasp push --force
+      - name: Create or update deployment
+        shell: bash
+        env:
+          GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
+        run: |
+          if [ -n "$GAS_DEPLOYMENT_ID" ]; then
+            clasp create-deployment --deploymentId "$GAS_DEPLOYMENT_ID" --description "FAB Integration V1 ${{ inputs.target }} ${GITHUB_SHA}"
+          else
+            clasp create-deployment --description "FAB Integration V1 ${{ inputs.target }} ${GITHUB_SHA}"
+          fi
