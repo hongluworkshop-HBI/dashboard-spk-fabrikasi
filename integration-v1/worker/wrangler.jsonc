@@ -10,7 +10,7 @@
   },
   "env": {
     "dev": {
-      "name": "fabrikasi-honglu-dev",
+      "name": "fabrikasi-integration-v1-dev",
       "vars": {
         "ENVIRONMENT": "dev",
         "ENABLE_SCHEDULED_SYNC": "false"
