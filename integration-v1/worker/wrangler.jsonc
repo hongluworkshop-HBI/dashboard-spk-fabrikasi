@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "fabrikasi-integration-v1",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-16",
+  "workers_dev": true,
+  "vars": {
+    "ENVIRONMENT": "base",
+    "ENABLE_SCHEDULED_SYNC": "false"
+  },
+  "env": {
+    "dev": {
+      "name": "fabrikasi-integration-v1-dev",
+      "vars": {
+        "ENVIRONMENT": "dev",
+        "ENABLE_SCHEDULED_SYNC": "false"
+      }
+    },
+    "test": {
+      "name": "fabrikasi-integration-v1-test",
+      "vars": {
+        "ENVIRONMENT": "test",
+        "ENABLE_SCHEDULED_SYNC": "false"
+      }
+    },
+    "production": {
+      "name": "fabrikasi-integration-v1-prod",
+      "vars": {
+        "ENVIRONMENT": "production",
+        "ENABLE_SCHEDULED_SYNC": "false"
+      },
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      }
+    }
+  }
+}

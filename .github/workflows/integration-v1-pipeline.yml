@@ -1,0 +1,106 @@
+name: FABRIKASI Integration V1 - Cloudflare Pipeline
+
+on:
+  push:
+    branches:
+      - integration-v1-cloudflare-pipeline
+    paths:
+      - "integration-v1/worker/**"
+      - ".github/workflows/integration-v1-pipeline.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deployment target"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - test
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fabrikasi-integration-v1-${{ github.event.inputs.target || 'ci' }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  CLOUDFLARE_ACCOUNT_ID: "e86ef325811832567481c9e3fa2e1521"
+
+jobs:
+  validate:
+    name: Validate Worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integration-v1/worker
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --no-audit --no-fund
+      - run: npm run check
+      - name: Wrangler dry run
+        run: npx wrangler deploy --dry-run --env dev
+
+  deploy-cloudflare:
+    name: Deploy Cloudflare Worker
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: integration-${{ inputs.target }}
+    defaults:
+      run:
+        working-directory: integration-v1/worker
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --no-audit --no-fund
+      - name: Resolve target
+        id: target
+        shell: bash
+        run: echo "env=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
+      - name: Preflight deployment credentials
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GAS_ORIGIN_URL: ${{ secrets.GAS_ORIGIN_URL || vars.GAS_ORIGIN_URL }}
+          GATEWAY_SHARED_SECRET: ${{ secrets.GATEWAY_SHARED_SECRET }}
+        run: |
+          missing=()
+          [ -z "$CLOUDFLARE_API_TOKEN" ] && missing+=("CLOUDFLARE_API_TOKEN")
+          [ -z "$GAS_ORIGIN_URL" ] && missing+=("GAS_ORIGIN_URL")
+          [ -z "$GATEWAY_SHARED_SECRET" ] && missing+=("GATEWAY_SHARED_SECRET")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required deployment values: ${missing[*]}"
+            exit 1
+          fi
+          echo "Cloudflare deployment preflight passed."
+      - name: Sync Worker secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GAS_ORIGIN_URL: ${{ secrets.GAS_ORIGIN_URL || vars.GAS_ORIGIN_URL }}
+          GATEWAY_SHARED_SECRET: ${{ secrets.GATEWAY_SHARED_SECRET }}
+          CONTROL_TOKEN: ${{ secrets.CONTROL_TOKEN }}
+        run: |
+          printf '%s' "$GAS_ORIGIN_URL" | npx wrangler secret put GAS_ORIGIN_URL --env "${{ steps.target.outputs.env }}"
+          printf '%s' "$GATEWAY_SHARED_SECRET" | npx wrangler secret put GATEWAY_SHARED_SECRET --env "${{ steps.target.outputs.env }}"
+          if [ -n "$CONTROL_TOKEN" ]; then
+            printf '%s' "$CONTROL_TOKEN" | npx wrangler secret put CONTROL_TOKEN --env "${{ steps.target.outputs.env }}"
+          else
+            printf '%s' "$GATEWAY_SHARED_SECRET" | npx wrangler secret put CONTROL_TOKEN --env "${{ steps.target.outputs.env }}"
+          fi
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: integration-v1/worker
+          command: deploy --env ${{ steps.target.outputs.env }}
